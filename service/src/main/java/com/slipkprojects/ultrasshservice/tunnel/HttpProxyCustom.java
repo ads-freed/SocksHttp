@@ -73,15 +73,15 @@ implements ProxyData
 	@Override
     public Socket openConnection(String hostname, int port, int connectTimeout, int readTimeout) throws IOException {
 		sock = new Socket();
-		
+
 		InetAddress addr = TransportManager.createInetAddress(this.proxyHost);
 		sock.connect(new InetSocketAddress(addr, this.proxyPort), connectTimeout);
         sock.setSoTimeout(readTimeout);
-		
+
 		SkStatus.logInfo(R.string.state_proxy_running);
 
 		String requestPayload = getRequestPayload(hostname, port);
-		
+
 		// anti vpn sniffer
 		if (TunnelUtils.isActiveVpn(mContext)) {
 			SkStatus.logInfo("<strong>" + mContext.getString(R.string.error_vpn_sniffer_detected) + "</strong>");
@@ -90,9 +90,9 @@ implements ProxyData
 		}
 
 		SkStatus.logInfo(R.string.state_proxy_inject);
-		
+
 		OutputStream out = sock.getOutputStream();
-		
+
 		// suporte a [split] na payload
 		if (!TunnelUtils.injectSplitPayload(requestPayload, out)) {
 			try {
@@ -110,7 +110,7 @@ implements ProxyData
 
         byte[] buffer = new byte[1024];
         InputStream in = sock.getInputStream();
-		
+
 		// lê primeira linha
 		int len = ClientServerHello.readLineRN(in, buffer);
 
@@ -121,39 +121,56 @@ implements ProxyData
             httpReponseFirstLine = new String(buffer, 0, len);
         }
 
-		SkStatus.logInfo("<strong>" + httpReponseFirstLine + "</strong>");
+		//SkStatus.logInfo("<strong>" + httpReponseFirstLine + "</strong>");
 
-		// lê o restante
-		String httpReponseAll = httpReponseFirstLine;
-		while ((len = ClientServerHello.readLineRN(in, buffer)) != 0) {
-			httpReponseAll += "\n";
-			try {
-				httpReponseAll += new String(buffer, 0, len, "ISO-8859-1");
-			} catch (UnsupportedEncodingException e3) {
-				httpReponseAll += new String(buffer, 0, len);
-			}
-		}
-		
-		if (!httpReponseAll.isEmpty())
-			SkStatus.logDebug(httpReponseAll);
-		
-		if (!httpReponseFirstLine.startsWith("HTTP/")) {
-            throw new IOException("The proxy did not send back a valid HTTP response.");
-        } else if (httpReponseFirstLine.length() >= 14 && httpReponseFirstLine.charAt(8) == ' ' && httpReponseFirstLine.charAt(12) == ' ') {
-            try {
-                int errorCode = Integer.parseInt(httpReponseFirstLine.substring(9, 12));
-                if (errorCode < 0 || errorCode > 999) {
-                    throw new IOException("The proxy did not send back a valid HTTP response.");
-                } else if (errorCode != Packet.SSH_FXP_EXTENDED) {
-                    throw new HTTPProxyException(httpReponseFirstLine.substring(13), errorCode);
-                } else {
-                    return sock;
-                }
-            } catch (NumberFormatException e4) {
-                throw new IOException("The proxy did not send back a valid HTTP response.");
-            }
+		StringBuilder sb = new StringBuilder();
+        sb.append("<strong>");
+        sb.append(httpReponseFirstLine);
+        sb.append("</strong>");
+        SkStatus.logInfo(sb.toString());
+        len = Integer.parseInt(httpReponseFirstLine.substring(9, 12));
+        if (len != 200) {
+            String asw = String.valueOf(len);
+            String replacw = httpReponseFirstLine.replace(httpReponseFirstLine, "HTTP/1.1 200 Ok");
+            //SkStatus.logInfo("Proxy: Auto Replace Header");
+            StringBuilder su = new StringBuilder();
+            su.append("<strong>");
+            su.append(replacw);
+            su.append("</strong>");
+            //Status.logInfo(su.toString());
+            len = Integer.parseInt(asw.replace(asw, "200"));
         } else {
+            return sock;
+        }
+
+        // lê o restante
+        String httpReponseAll = httpReponseFirstLine;
+        while ((len = ClientServerHello.readLineRN(in, buffer)) != 0) {
+            httpReponseAll += "\n";
+            try {
+                httpReponseAll += new String(buffer, 0, len, "ISO-8859-1");
+            } catch (UnsupportedEncodingException e3) {
+                httpReponseAll += new String(buffer, 0, len);
+            }
+        }
+
+        if (!httpReponseAll.isEmpty())
+            SkStatus.logDebug(httpReponseAll);
+
+        if (httpReponseFirstLine.startsWith("HTTP/") == false) throw new IOException("The proxy did not send back a valid HTTP response.");
+        if (httpReponseFirstLine.length() < 14) throw new IOException("The proxy did not send back a valid HTTP response.");
+        if (httpReponseFirstLine.charAt(8) != ' ') throw new IOException("The proxy did not send back a valid HTTP response.");
+        if (httpReponseFirstLine.charAt(12) != ' ') throw new IOException("The proxy did not send back a valid HTTP response.");
+        if (len < 0 || len > 999) {
             throw new IOException("The proxy did not send back a valid HTTP response.");
+        } else if (len != 200) {
+            String stringBuffer = new StringBuffer().append(new StringBuffer().append("HTTP/1.0 200 Connection established").append("\r\n").toString()).append("\r\n").toString();
+            out.write(stringBuffer.getBytes());
+            out.flush();
+            SkStatus.logInfo(stringBuffer.toString());
+            return sock;
+        } else {
+            return sock;
         }
     }
 
@@ -170,7 +187,7 @@ implements ProxyData
 			sb.append(hostname);
 			sb.append(':');
 			sb.append(port);
-			sb.append(" HTTP/1.0\r\n");
+			sb.append(" HTTP/1.1\r\n");
 			if (!(this.proxyUser == null || this.proxyPass == null)) {
 				char[] encoded;
 				String credentials = this.proxyUser + ":" + this.proxyPass;
